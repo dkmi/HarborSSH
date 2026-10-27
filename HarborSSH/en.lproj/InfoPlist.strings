@@ -1,0 +1,2 @@
+"NSFaceIDUsageDescription" = "Face ID unlocks your SSH servers and credentials.";
+"NSLocalNetworkUsageDescription" = "Connect to SSH servers on your local network.";

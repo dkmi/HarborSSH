@@ -1,0 +1,2 @@
+"NSFaceIDUsageDescription" = "Face ID отключва вашите SSH сървъри и защитени данни.";
+"NSLocalNetworkUsageDescription" = "Свързване към SSH сървъри във вашата локална мрежа.";
