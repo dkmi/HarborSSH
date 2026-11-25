@@ -39,7 +39,11 @@ final class HostValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked 
     private var writer: TTYStdinWriter?
     private var task: Task<Void, Never>?
     private var inputTask: Task<Void, Never>?
-    private var input: AsyncStream<[UInt8]>.Continuation?
+    private enum TerminalEvent {
+        case input([UInt8])
+        case resize(cols: Int, rows: Int)
+    }
+    private var input: AsyncStream<TerminalEvent>.Continuation?
     weak var terminal: TerminalView?
     private var generation = UUID()
     private var validationFailure: String?
@@ -60,6 +64,12 @@ final class HostValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked 
 
     func connect(_ server: Server, store: AppState) {
         disconnect()
+        // Read the emulator's actual visible columns rather than assuming 80.
+        if let terminal, terminal.bounds.width > 0, terminal.bounds.height > 0 {
+            terminal.layoutIfNeeded()
+            let dimensions = terminal.getTerminal().getDims()
+            resize(cols: dimensions.cols, rows: dimensions.rows)
+        }
         let token = UUID()
         generation = token
         validationFailure = nil
@@ -89,13 +99,23 @@ final class HostValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked 
                     terminalCharacterWidth: cols, terminalRowHeight: rows,
                     terminalPixelWidth: 0, terminalPixelHeight: 0, terminalModes: .init([:]))) { inbound, outbound in
                     self.writer = outbound
-                    self.statusKey = "Connected"
-                    let stream = AsyncStream<[UInt8]> { self.input = $0 }
+                    let stream = AsyncStream<TerminalEvent> { self.input = $0 }
+                    // Layout may have changed while the PTY request was awaiting a reply.
+                    // Send the latest dimensions before any input, through the same queue.
+                    self.input?.yield(.resize(cols: self.cols, rows: self.rows))
                     self.inputTask = Task {
                         do {
-                            for await bytes in stream { try await outbound.write(ByteBuffer(bytes: bytes)) }
+                            for await event in stream {
+                                switch event {
+                                case .input(let bytes):
+                                    try await outbound.write(ByteBuffer(bytes: bytes))
+                                case .resize(let cols, let rows):
+                                    try await outbound.changeSize(cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+                                }
+                            }
                         } catch { self.statusKey = "Error"; self.statusDetail = error.localizedDescription; self.disconnect() }
                     }
+                    self.statusKey = "Connected"
                     for try await output in inbound {
                         guard self.generation == token else { break }
                         switch output {
@@ -137,11 +157,11 @@ final class HostValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked 
         trustContinuation?.resume(returning: accepted)
         trustContinuation = nil
     }
-    func send(_ bytes: [UInt8]) { input?.yield(bytes) }
+    func send(_ bytes: [UInt8]) { input?.yield(.input(bytes)) }
     func resize(cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
         self.cols = cols; self.rows = rows
-        guard let writer else { return }
-        Task { try? await writer.changeSize(cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0) }
+        input?.yield(.resize(cols: cols, rows: rows))
     }
     func disconnect() {
         generation = UUID()

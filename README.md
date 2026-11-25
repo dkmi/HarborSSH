@@ -11,6 +11,7 @@ A native SwiftUI SSH client for iOS 17+ with English and Bulgarian interfaces. *
 - Authenticate using a password or an OpenSSH private key: Ed25519 / RSA, with or without a passphrase.
 - Import a key from Files or paste it using the system Paste button.
 - Interactive xterm-256color terminal with PTY, resizing and SwiftTerm's keyboard accessory: Esc, Ctrl, Tab and arrow keys. Use Ctrl + C to interrupt a command.
+- Match the SSH terminal dimensions to the visible screen before input; long commands wrap visually without inserting an Enter key.
 - Face ID required at launch and after entering the background. No PIN fallback.
 - Hide the interface while the app is inactive and close the SSH connection when locked.
 - Store server profiles and secrets in iOS Keychain using `WhenUnlockedThisDeviceOnly`; no iCloud synchronization.
@@ -43,7 +44,7 @@ Citadel's RSA authentication uses `ssh-rsa` (SHA-1); servers allowing only RSA-S
 
 ## Verification
 
-Tests cover Keychain round trips, encrypted Ed25519 and RSA key parsing, incorrect passphrases, interactive PTY connections with passwords and keys, rejecting trust, changed host keys and disconnecting when the app locks. Language tests cover the English default, saving the preference and the bundled English/Bulgarian translations. A keyboard regression test checks that the prompt stays above the accessory after 200 output lines and that the terminal expands again when the keyboard closes.
+Tests cover Keychain round trips, encrypted Ed25519 and RSA key parsing, incorrect passphrases, interactive PTY connections with passwords and keys, rejecting trust, changed host keys and disconnecting when the app locks. Language tests cover the English default, saving the preference and the bundled English/Bulgarian translations. Additional tests check wrapping at several viewport widths and synchronize server dimensions when the screen changes during PTY setup. A keyboard regression test checks that the prompt stays above the accessory after 200 output lines and that the terminal expands again when the keyboard closes.
 
 Integration tests use a local Python SSH endpoint that echoes bytes and does not execute commands. `HarborSSHTests/Fixtures` contains generated test keys only; never use them on a real server.
 

@@ -71,6 +71,55 @@ import SwiftTerm
         }
         XCTAssertTrue(expanded, "Terminal should expand again when the keyboard closes")
     }
+    func testLongLineWrapsAtVisibleWidth() {
+        for width: CGFloat in [320, 393, 852] {
+            let view = TerminalView(frame: CGRect(x: 0, y: 0, width: width, height: 500))
+            view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+            view.layoutIfNeeded()
+            let terminal = view.getTerminal()
+            let columns = terminal.cols
+            XCTAssertGreaterThan(columns, 1)
+            view.feed(text: String(repeating: "x", count: columns - 1) + "YZ")
+            XCTAssertEqual(terminal.getCharData(col: columns - 1, row: 0)?.getCharacter(), "Y")
+            XCTAssertEqual(terminal.getCharData(col: 0, row: 1)?.getCharacter(), "Z")
+            XCTAssertEqual(terminal.getCursorLocation().y, 1)
+        }
+    }
+    func testPTYResynchronizesWidthChangedDuringOpeningBeforeInput() async throws {
+        let previous = try Vault.read()
+        defer { try? Vault.save(previous) }
+        let state = AppState()
+        state.unlocked = true
+        let server = profile()
+        state.servers = [server]
+        let terminal = TerminalView(frame: CGRect(x: 0, y: 0, width: 393, height: 500))
+        state.session.terminal = terminal
+        defer { state.session.disconnect() }
+        state.session.connect(server, store: state)
+        _ = await waitUntil { state.session.trustRequest != nil || !state.session.running }
+        XCTAssertNotNil(state.session.trustRequest)
+        state.session.resolveTrust(true)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        // The fixture holds channel opening for 500 ms after the PTY size was captured.
+        XCTAssertNotEqual(state.session.status, L10n.text("Connected"))
+        state.session.resize(cols: 37, rows: 18)
+        _ = await waitUntil { state.session.status == L10n.text("Connected") || !state.session.running }
+        XCTAssertEqual(state.session.status, L10n.text("Connected"))
+        state.session.send(Array("\u{1e}SIZE?\u{1f}".utf8))
+        let initial = await waitUntil {
+            let data: Data = terminal.getTerminal().getBufferAsData()
+            return String(decoding: data, as: UTF8.self).contains("PTY_SIZE=37x18")
+        }
+        XCTAssertTrue(initial, "Server must use the latest viewport before receiving input")
+        state.session.resize(cols: 61, rows: 20)
+        state.session.resize(cols: 29, rows: 16)
+        state.session.send(Array("\u{1e}SIZE?\u{1f}".utf8))
+        let resized = await waitUntil {
+            let data: Data = terminal.getTerminal().getBufferAsData()
+            return String(decoding: data, as: UTF8.self).contains("PTY_SIZE=29x16")
+        }
+        XCTAssertTrue(resized, "Typing must follow the latest resize, in order")
+    }
     func fixture(_ name: String) throws -> String {
         let bundle = Bundle(for: Self.self)
         let url = bundle.url(forResource: name, withExtension: nil, subdirectory: "Fixtures") ?? bundle.url(forResource: name, withExtension: nil)!

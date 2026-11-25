@@ -3,6 +3,7 @@ Run this process before xcodebuild test. Credentials are disposable fixtures.
 """
 import socket
 import threading
+import time
 from pathlib import Path
 import paramiko
 
@@ -12,26 +13,47 @@ KEYS = [paramiko.Ed25519Key.from_private_key_file(str(ROOT / 'ed25519'), passwor
 HOST_KEY = KEYS[0]
 
 class Server(paramiko.ServerInterface):
+    def __init__(self):
+        self.width, self.height = 80, 24
     def get_allowed_auths(self, username): return 'password,publickey'
     def check_auth_password(self, username, password):
         return paramiko.AUTH_SUCCESSFUL if username == 'tester' and password == 'test-only' else paramiko.AUTH_FAILED
     def check_auth_publickey(self, username, key):
         return paramiko.AUTH_SUCCESSFUL if username == 'tester' and any(key == k for k in KEYS) else paramiko.AUTH_FAILED
     def check_channel_request(self, kind, chanid):
+        # Hold channel opening while the client's visible width changes.
+        time.sleep(0.5)
         return paramiko.OPEN_SUCCEEDED if kind == 'session' else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
-    def check_channel_pty_request(self, *args): return True
+    def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+        self.width, self.height = width, height
+        return True
     def check_channel_shell_request(self, channel): return True
-    def check_channel_window_change_request(self, *args): return True
+    def check_channel_window_change_request(self, channel, width, height, pixelwidth, pixelheight):
+        self.width, self.height = width, height
+        return True
 
 def serve(connection):
     transport = paramiko.Transport(connection)
     try:
         transport.add_server_key(HOST_KEY)
-        transport.start_server(server=Server())
+        server = Server()
+        transport.start_server(server=server)
         channel = transport.accept(30)
         if channel:
             channel.send(b'Harbor test SSH endpoint\r\n$ ')
-            while data := channel.recv(4096): channel.send(data)
+            pending = b''
+            query = b'\x1eSIZE?\x1f'
+            while data := channel.recv(4096):
+                pending += data
+                while pending:
+                    if pending.startswith(query):
+                        channel.send(f'\r\nPTY_SIZE={server.width}x{server.height}\r\n'.encode())
+                        pending = pending[len(query):]
+                    elif query.startswith(pending):
+                        break
+                    else:
+                        channel.send(pending[:1])
+                        pending = pending[1:]
     except (EOFError, OSError, paramiko.SSHException): pass
     finally: transport.close()
 
